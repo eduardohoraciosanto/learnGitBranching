@@ -77,9 +77,12 @@ var InteractiveRebaseView = ContainedBase.extend({
     // now get the real array
     var toRebase = [];
     uiOrder.forEach(function(id) {
-      // the model pick check
-      if (this.entryObjMap[id].get('pick')) {
-        toRebase.unshift(this.rebaseMap[id]);
+      var model = this.entryObjMap[id];
+      var commit = this.rebaseMap[id];
+      commit.set('rebase_type', model.get('rebase_type'));
+
+      if (model.get('rebase_type') !== 'omit') {
+        toRebase.unshift(commit);
       }
     }, this);
     toRebase.reverse();
@@ -150,11 +153,14 @@ var InteractiveRebaseView = ContainedBase.extend({
 
 var RebaseEntry = Backbone.Model.extend({
   defaults: {
-    pick: true
+    rebase_type: 'pick'
   },
 
   toggle: function() {
-    this.set('pick', !this.get('pick'));
+    var types = ['pick', 'squash', 'omit'];
+    var currentType = this.get('rebase_type');
+    var nextIndex = (types.indexOf(currentType) + 1) % types.length;
+    this.set('rebase_type', types[nextIndex]);
   }
 });
 
@@ -169,8 +175,15 @@ var RebaseEntryView = Backbone.View.extend({
   toggle: function() {
     this.model.toggle();
 
-    // toggle a class also
-    this.listEntry.toggleClass('notPicked', !this.model.get('pick'));
+    this.listEntry.removeClass('notPicked');
+    this.listEntry.removeClass('squashed');
+
+    var type = this.model.get('rebase_type');
+    if (type === 'omit') {
+      this.listEntry.addClass('notPicked');
+    } else if (type === 'squash') {
+      this.listEntry.addClass('squashed');
+    }
   },
 
   initialize: function(options) {

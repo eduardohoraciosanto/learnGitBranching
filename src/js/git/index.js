@@ -2316,6 +2316,16 @@ GitEngine.prototype.rebaseInteractive = function(targetSource, currentLocation, 
       });
     }
 
+    //they might want to Squash the first commit, which is an error
+    //check if the first commmit has squash, then error out
+    if (userSpecifiedRebase[0].get('rebase_type') == 'squash'){
+      throw new CommandResult({
+        msg: intl.str('git-error-rebase-squash-without-parent', {
+          commit: userSpecifiedRebase[0].get('id')
+        })
+      });
+    }
+
     // finish the rebase crap and animate!
     this.rebaseFinish(userSpecifiedRebase, {}, targetSource, currentLocation);
   }.bind(this))
@@ -2447,28 +2457,60 @@ GitEngine.prototype.rebaseFinish = function(
   var hasStartedChain = false;
   // each step makes a new commit
   var chainStep = function(oldCommit) {
-    var newId = this.rebaseAltID(oldCommit.get('id'));
-    var parents;
-    if (!options.preserveMerges || !hasStartedChain) {
-      // easy logic since we just have a straight line
-      parents = [base];
-    } else { // preserving merges
-      // we always define the parent for the first commit to plop,
-      // otherwise search for most recent parents
-      parents = (hasStartedChain) ?
-        this.getRebasePreserveMergesParents(oldCommit) :
-        [base];
+    // Check if this is a squashed commit (already processed)
+    if (oldCommit.get('isSquashed')) {
+      // For squashed commits, we need to create a new commit with the squashed content
+      // but use the parents from the current base
+      var parents;
+      if (!options.preserveMerges || !hasStartedChain) {
+        parents = [base];
+      } else {
+        parents = (hasStartedChain) ?
+          this.getRebasePreserveMergesParents(oldCommit) :
+          [base];
+      }
+
+      var newCommit = this.makeCommit(parents, oldCommit.get('id'), {
+        commitMessage: oldCommit.get('commitMessage'),
+        author: oldCommit.get('author'),
+        createTime: oldCommit.get('createTime')
+      });
+      base = newCommit;
+      hasStartedChain = true;
+
+      return this.animationFactory.playCommitBirthPromiseAnimation(
+        newCommit,
+        this.gitVisuals
+      );
+    } else {
+      // Normal commit processing
+      var newId = this.rebaseAltID(oldCommit.get('id'));
+      var parents;
+      if (!options.preserveMerges || !hasStartedChain) {
+        // easy logic since we just have a straight line
+        parents = [base];
+      } else { // preserving merges
+        // we always define the parent for the first commit to plop,
+        // otherwise search for most recent parents
+        parents = (hasStartedChain) ?
+          this.getRebasePreserveMergesParents(oldCommit) :
+          [base];
+      }
+
+      var newCommit = this.makeCommit(parents, newId);
+      base = newCommit;
+      hasStartedChain = true;
+
+      return this.animationFactory.playCommitBirthPromiseAnimation(
+        newCommit,
+        this.gitVisuals
+      );
     }
-
-    var newCommit = this.makeCommit(parents, newId);
-    base = newCommit;
-    hasStartedChain = true;
-
-    return this.animationFactory.playCommitBirthPromiseAnimation(
-      newCommit,
-      this.gitVisuals
-    );
   }.bind(this);
+
+  // evaluate toRebase array and mutate it with the corresponding squashed commits
+  // commits to be squashed will have the "rebase_type" attribute equals 'squash'
+  toRebase = this.processSquashOperations(toRebase);
 
   // set up the promise chain
   toRebase.forEach(function (commit) {
@@ -2894,6 +2936,110 @@ GitEngine.prototype.getDownstreamSet = function(ancestor) {
     children.forEach(addToExplored);
   }
   return exploredSet;
+};
+
+GitEngine.prototype.processSquashOperations = function(toRebase) {
+  if (!toRebase || toRebase.length === 0) {
+    return toRebase;
+  }
+
+  var processedCommits = [];
+  var currentSquashGroup = null;
+
+  for (var i = 0; i < toRebase.length; i++) {
+    var commit = toRebase[i];
+    var rebaseType = commit.get('rebase_type') || 'pick';
+
+    if (rebaseType === 'squash') {
+      // If this is the first commit and it's marked as squash, that's an error
+      // (should be caught earlier, but just in case)
+      if (i === 0) {
+        throw new GitError({
+          msg: intl.str('git-error-rebase-squash-without-parent', {
+            commit: commit.get('id')
+          })
+        });
+      }
+
+      // If we don't have a current squash group, start one with the previous commit
+      if (!currentSquashGroup) {
+        var previousCommit = toRebase[i - 1];
+        currentSquashGroup = {
+          commits: [previousCommit, commit],
+          baseId: previousCommit.get('id'),
+          combinedMessage: previousCommit.get('commitMessage') + '\n\n' + commit.get('commitMessage')
+        };
+        // Remove the previous commit from processedCommits since it's now part of the squash group
+        processedCommits.pop();
+      } else {
+        // Add this commit to the existing squash group
+        currentSquashGroup.commits.push(commit);
+        currentSquashGroup.combinedMessage += '\n\n' + commit.get('commitMessage');
+      }
+    } else if (rebaseType === 'pick') {
+      // If we have a pending squash group, finalize it first
+      if (currentSquashGroup) {
+        var squashedCommit = this.createSquashedCommit(currentSquashGroup);
+        processedCommits.push(squashedCommit);
+        currentSquashGroup = null;
+      }
+      
+      // Add this commit normally
+      processedCommits.push(commit);
+    } else if (rebaseType === 'omit') {
+      // If we have a pending squash group, finalize it first
+      if (currentSquashGroup) {
+        var squashedCommit = this.createSquashedCommit(currentSquashGroup);
+        processedCommits.push(squashedCommit);
+        currentSquashGroup = null;
+      }
+      // Skip this commit (omit)
+    }
+  }
+
+  // Handle any remaining squash group at the end
+  if (currentSquashGroup) {
+    var squashedCommit = this.createSquashedCommit(currentSquashGroup);
+    processedCommits.push(squashedCommit);
+  }
+
+  return processedCommits;
+};
+
+GitEngine.prototype.createSquashedCommit = function(squashGroup) {
+  // Deep clone the first commit to avoid triggering visual creation
+  var baseCommit = squashGroup.commits[0];
+  var commitIds = squashGroup.commits.map(function(c) { return c.get('id'); });
+  var newId = commitIds.join('-');
+  
+  // Create a plain object that mimics a Commit but doesn't trigger visual creation
+  var squashedCommit = {
+    // Backbone Model interface methods
+    get: function(key) {
+      return this[key];
+    },
+    set: function(key, value) {
+      this[key] = value;
+    },
+    
+    // Commit properties
+    id: newId,
+    parents: baseCommit.get('parents'),
+    author: baseCommit.get('author'),
+    createTime: baseCommit.get('createTime'),
+    commitMessage: squashGroup.combinedMessage,
+    gitVisuals: this.gitVisuals,
+    children: [],
+    
+    // Mark this as a squashed commit
+    isSquashed: true,
+    originalCommits: commitIds,
+    
+    // Type for compatibility
+    type: 'commit'
+  };
+
+  return squashedCommit;
 };
 
 var Ref = Backbone.Model.extend({

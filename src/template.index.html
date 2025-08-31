@@ -291,7 +291,7 @@
         </p>
       <% } %>
       <p class="helperText">
-        (Drag and drop to re-order. Toggle the "Omit/Pick" button to omit or re-add a commit)
+        (Drag and drop to re-order. Toggle the "Pick" button to squash, omit or re-add (pick) a commit)
       </p>
       <div class="entryHolders">
         <ul class="rebaseEntries">
@@ -350,10 +350,13 @@
         </span>
         <button id="toggleButton" class="noStyle uiButton uiButtonPink">
           <span class="showWhenPicked">
-            Click to Drop/Omit
+            Pick
           </span>
-          <span class="showWhenNotPicked">
-            Click to Include/Pick
+          <span class="showWhenOmitted">
+            Omit
+          </span>
+          <span class="showWhenSquashed">
+            Squash
           </span>
         </button>
       </div>

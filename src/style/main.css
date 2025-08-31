@@ -829,15 +829,23 @@ li.rebaseEntry.notPicked {
   opacity: 0.2;
 }
 
-li.rebaseEntry.notPicked span.showWhenPicked {
+li.rebaseEntry.notPicked span.showWhenPicked,
+li.rebaseEntry.squashed span.showWhenPicked,
+li.rebaseEntry.squashed span.showWhenOmitted,
+li.rebaseEntry.notPicked span.showWhenSquashed {
   display: none;
 }
 
-li.rebaseEntry span.showWhenNotPicked {
+li.rebaseEntry span.showWhenOmitted,
+li.rebaseEntry span.showWhenSquashed {
   display: none;
 }
 
-li.rebaseEntry.notPicked span.showWhenNotPicked {
+li.rebaseEntry.notPicked span.showWhenOmitted {
+  display: inline;
+}
+
+li.rebaseEntry.squashed span.showWhenSquashed {
   display: inline;
 }
 
